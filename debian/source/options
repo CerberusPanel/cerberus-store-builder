@@ -1,3 +1,0 @@
-# Generated artefacts and locally installed JavaScript dependencies must not
-# enter the Debian source package.
-extend-diff-ignore = (?:^|/)(?:node_modules|dist|dist-electron|output)(?:/|$)

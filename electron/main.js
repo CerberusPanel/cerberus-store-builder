@@ -69,7 +69,7 @@ function validateStore(store) {
 async function importImage(urlValue) {
   let url; try { url=new URL(String(urlValue??'')) } catch { throw new Error('Enter a valid image URL.') }
   if(!['http:','https:'].includes(url.protocol)) throw new Error('Image URL must use http or https.')
-  const response=await fetch(url,{redirect:'follow',signal:AbortSignal.timeout(15000),headers:{'User-Agent':'Cerberus-Store-Builder/1.0'}})
+  const response=await fetch(url,{redirect:'follow',signal:AbortSignal.timeout(15000),headers:{'User-Agent':`Cerberus-Store-Builder/${app.getVersion()}`}})
   if(!response.ok) throw new Error(`Image server returned HTTP ${response.status}.`)
   const type=String(response.headers.get('content-type')??'').split(';')[0].trim().toLowerCase()
   if(!type.startsWith('image/')) throw new Error('That URL did not return an image.')

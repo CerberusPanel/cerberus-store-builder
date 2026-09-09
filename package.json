@@ -2,13 +2,13 @@
 	"name": "cerberus-store-builder",
 	"productName": "Cerberus Store Builder",
 	"description": "Build, validate, version and export self-contained Cerberus app store release files.",
-	"homepage": "https://github.com/ryvor/AppStoreFileBuilder",
+	"homepage": "https://github.com/CerberusPanel/cerberus-store-builder",
 	"author": {
 		"name": "Ryvor",
 		"email": "rsmith_20@outlook.com"
 	},
 	"private": true,
-	"version": "0.5.0",
+	"version": "1.0.0-beta-1",
 	"type": "module",
 	"main": "electron/main.js",
 	"scripts": {
@@ -36,6 +36,7 @@
 	"build": {
 		"appId": "com.ryvor.cerberus.storebuilder",
 		"productName": "Cerberus Store Builder",
+		"artifactName": "Cerberus-Store-Builder-${version}-${os}-${arch}.${ext}",
 		"directories": {
 			"output": "dist-electron"
 		},

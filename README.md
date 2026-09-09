@@ -31,6 +31,14 @@ Electron Builder writes installers/packages to `dist-electron/`.
 
 > In practice, macOS installers should be built on macOS. Windows and Linux targets may also have host/toolchain requirements depending on the target format and signing setup.
 
+## Versioning
+
+When releasing new version just update the version in `package.json` and run the following command
+
+```bash
+npm install --package-lock-only --ignore-scripts
+```
+
 ## Installed-app data
 
 A packaged application writes releases to a user-writable location instead of its installation directory:
