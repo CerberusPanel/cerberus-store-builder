@@ -1,0 +1,80 @@
+{
+	"name": "cerberus-store-builder",
+	"productName": "Cerberus Store Builder",
+	"description": "Build, validate, version and export self-contained Cerberus app store release files.",
+	"homepage": "https://github.com/ryvor/AppStoreFileBuilder",
+	"author": {
+		"name": "Ryvor",
+		"email": "rsmith_20@outlook.com"
+	},
+	"private": true,
+	"version": "0.5.0",
+	"type": "module",
+	"main": "electron/main.js",
+	"scripts": {
+		"dev": "vite",
+		"dev:desktop": "concurrently -k \"vite --host 127.0.0.1\" \"wait-on http://127.0.0.1:5173 && cross-env VITE_DEV_SERVER_URL=http://127.0.0.1:5173 electron .\"",
+		"build": "vite build",
+		"build:desktop": "vite build && electron-builder",
+		"build:win": "vite build && electron-builder --win",
+		"build:mac": "vite build && electron-builder --mac",
+		"build:linux": "vite build && electron-builder --linux",
+		"preview": "vite preview"
+	},
+	"dependencies": {
+		"@vitejs/plugin-vue": "latest",
+		"vite": "latest",
+		"vue": "latest"
+	},
+	"devDependencies": {
+		"concurrently": "latest",
+		"cross-env": "latest",
+		"electron": "latest",
+		"electron-builder": "latest",
+		"wait-on": "latest"
+	},
+	"build": {
+		"appId": "com.ryvor.cerberus.storebuilder",
+		"productName": "Cerberus Store Builder",
+		"directories": {
+			"output": "dist-electron"
+		},
+		"files": [
+			"dist/**/*",
+			"electron/**/*",
+			"package.json",
+			"build/logo-transparent.png"
+		],
+		"asar": true,
+		"mac": {
+			"category": "public.app-category.developer-tools",
+			"target": [
+				"dmg",
+				"zip"
+			]
+		},
+		"win": {
+			"target": [
+				{
+				"target": "nsis",
+				"arch": [
+					"x64",
+					"arm64"
+				]
+				}
+			]
+		},
+		"linux": {
+			"category": "Development",
+			"target": [
+				"AppImage",
+				"deb"
+			]
+		},
+		"nsis": {
+			"oneClick": false,
+			"allowToChangeInstallationDirectory": true
+		},
+		"icon": "build/logo-transparent.png"
+	}
+}

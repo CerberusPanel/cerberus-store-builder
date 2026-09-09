@@ -1,0 +1,22 @@
+Source: cerberus-store-builder
+Section: utils
+Priority: optional
+Maintainer: Ryvor <rsmith_20@outlook.com>
+Build-Depends:
+ debhelper-compat (= 13),
+ nodejs,
+ npm
+Standards-Version: 4.7.0
+Rules-Requires-Root: no
+Homepage: https://github.com/ryvor/AppStoreFileBuilder
+
+Package: cerberus-store-builder
+Architecture: any
+Depends:
+ ${misc:Depends},
+ ${shlibs:Depends},
+ electron
+Description: build and export Cerberus app-store release files
+ Cerberus Store Builder is an Electron desktop editor for creating,
+ validating, versioning, and exporting self-contained Cerberus app-store
+ JSON release files.
