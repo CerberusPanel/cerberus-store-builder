@@ -466,7 +466,7 @@ function renderLogoSize(image, size) {
   const y = Math.round((size - height) / 2)
   context.drawImage(image, x, y, width, height)
 
-  return canvas.toDataURL('image/png').replace(/^data:image\/png;base64,/, '')
+  return canvas.toDataURL('image/png');
 }
 
 async function setLogoFromSource(source) {
