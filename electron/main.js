@@ -1,4 +1,4 @@
-import { app, BrowserWindow, Menu, ipcMain, shell } from 'electron'
+import { app, BrowserWindow, Menu, dialog, ipcMain, shell } from 'electron'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -6,10 +6,47 @@ import { fileURLToPath } from 'node:url'
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const isDev = Boolean(process.env.VITE_DEV_SERVER_URL)
 let mainWindow
+let configuredOutputDir = ''
+let configuredHotkeys = {}
+let shortcutCapture = false
+const DEFAULT_HOTKEYS = { undo: 'Mod+Z', redo: 'Mod+Shift+Z', load: 'Mod+O', saveDraft: 'Mod+S', export: 'Mod+E', settings: 'Mod+,', about: 'F1', search: 'Mod+F', addApp: 'Mod+N', storeData: 'Mod+Shift+,' }
 
-const outputDir = () => isDev
+const outputSettingsFile = () => path.join(app.getPath('userData'), 'output-folder.json')
+const hotkeySettingsFile = () => path.join(app.getPath('userData'), 'shortcuts.json')
+
+const defaultOutputDir = () => isDev
   ? path.resolve(process.cwd(), 'output')
   : path.join(app.getPath('documents'), 'Cerberus Store Builder', 'output')
+const outputDir = () => configuredOutputDir || defaultOutputDir()
+
+async function loadOutputFolder() {
+  try {
+    const settings = JSON.parse(await fs.readFile(outputSettingsFile(), 'utf8'))
+    if (typeof settings.outputDir === 'string' && settings.outputDir.trim()) configuredOutputDir = settings.outputDir
+  } catch {
+    // No saved preference yet.
+  }
+}
+async function persistOutputFolder() {
+  await fs.mkdir(app.getPath('userData'), { recursive: true })
+  await fs.writeFile(outputSettingsFile(), JSON.stringify({ outputDir: configuredOutputDir }), 'utf8')
+}
+function currentHotkeys() { return { ...DEFAULT_HOTKEYS, ...configuredHotkeys } }
+async function loadHotkeys() {
+  try {
+    const settings = JSON.parse(await fs.readFile(hotkeySettingsFile(), 'utf8'))
+    if (settings && typeof settings.hotkeys === 'object') configuredHotkeys = settings.hotkeys
+  } catch {
+    // Defaults are used until the user saves a shortcut preference.
+  }
+}
+async function persistHotkeys() {
+  await fs.mkdir(app.getPath('userData'), { recursive: true })
+  await fs.writeFile(hotkeySettingsFile(), JSON.stringify({ hotkeys: currentHotkeys() }), 'utf8')
+}
+function menuAccelerator(shortcut) {
+  return String(shortcut || '').replaceAll('Mod', 'CmdOrCtrl')
+}
 
 function parseVersion(value = '0.0.0') {
   const normalized = String(value).trim().toLowerCase().replace(/-([a-z]+)\/(\d+)$/, '-$1-$2')
@@ -78,11 +115,17 @@ async function importImage(urlValue) {
   return `data:${type};base64,${buffer.toString('base64')}`
 }
 function sendMenu(action){ mainWindow?.webContents.send('cerberus:menu-action',action) }
+function menuAction(action, label) {
+  const item = { label, click: () => sendMenu(action) }
+  if (!shortcutCapture && currentHotkeys()[action]) item.accelerator = menuAccelerator(currentHotkeys()[action])
+  return item
+}
 function buildMenu(){
   return Menu.buildFromTemplate([
     ...(process.platform==='darwin'?[{label:app.name,submenu:[{role:'about'},{type:'separator'},{role:'quit'}]}]:[]),
-    {label:'File',submenu:[{label:'Load Last Save',accelerator:'CmdOrCtrl+O',click:()=>sendMenu('load')},{label:'Save Release',accelerator:'CmdOrCtrl+S',click:()=>sendMenu('save')},{type:'separator'},{label:'Open Output Folder',click:()=>shell.openPath(outputDir())},...(process.platform==='darwin'?[]:[{type:'separator'},{role:'quit'}])]},
-    {label:'Edit',submenu:[{role:'undo'},{role:'redo'},{type:'separator'},{role:'cut'},{role:'copy'},{role:'paste'},{role:'selectAll'}]},
+    {label:'File',submenu:[menuAction('saveDraft', 'Save Draft'),menuAction('export', 'Export Release…'),menuAction('load', 'Load Last Export'),{type:'separator'},{label:'Open Output Folder',click:()=>shell.openPath(outputDir())},...(process.platform==='darwin'?[]:[{type:'separator'},{role:'quit'}])]},
+    {label:'Edit',submenu:[menuAction('undo', 'Undo'),menuAction('redo', 'Redo'),{type:'separator'},{role:'cut'},{role:'copy'},{role:'paste'},{role:'selectAll'}]},
+    {label:'Tools',submenu:[menuAction('search', 'Search Applications'),menuAction('addApp', 'Add Application'),menuAction('storeData', 'Store Data'),{type:'separator'},menuAction('settings', 'Settings'),menuAction('about', 'About')]},
     {label:'View',submenu:[{role:'reload'},...(isDev?[{role:'toggleDevTools'}]:[]),{type:'separator'},{role:'resetZoom'},{role:'zoomIn'},{role:'zoomOut'},{role:'togglefullscreen'}]},
   ])
 }
@@ -108,11 +151,44 @@ function createWindow(){
 }
 
 app.whenReady().then(async()=>{
+  await loadOutputFolder()
+  await loadHotkeys()
   await fs.mkdir(outputDir(),{recursive:true})
   Menu.setApplicationMenu(buildMenu())
-  ipcMain.handle('cerberus:get-info',()=>({platform:process.platform,outputDir:outputDir(),version:app.getVersion()}))
+  ipcMain.handle('cerberus:get-info',()=>({platform:process.platform,outputDir:outputDir(),defaultOutputDir:defaultOutputDir(),settingsFile:outputSettingsFile(),version:app.getVersion(),electronVersion:process.versions.electron,chromeVersion:process.versions.chrome,nodeVersion:process.versions.node,arch:process.arch,hotkeys:currentHotkeys(),defaultHotkeys:DEFAULT_HOTKEYS}))
+  ipcMain.handle('cerberus:set-hotkeys', async (_event, hotkeys) => {
+    if (!hotkeys || typeof hotkeys !== 'object') return { ok: false, error: 'Invalid shortcut settings.' }
+    configuredHotkeys = { ...DEFAULT_HOTKEYS, ...hotkeys }
+    await persistHotkeys()
+    Menu.setApplicationMenu(buildMenu())
+    return { ok: true, hotkeys: currentHotkeys() }
+  })
+  ipcMain.handle('cerberus:reset-hotkeys', async () => {
+    configuredHotkeys = {}
+    await persistHotkeys()
+    Menu.setApplicationMenu(buildMenu())
+    return { ok: true, hotkeys: currentHotkeys() }
+  })
+  ipcMain.on('cerberus:set-shortcut-capture', (_event, active) => {
+    shortcutCapture = Boolean(active)
+    Menu.setApplicationMenu(buildMenu())
+  })
   ipcMain.on('cerberus:set-titlebar-theme',(_event,theme)=>{if(theme==='light'||theme==='dark')setTitlebarTheme(theme)})
   ipcMain.handle('cerberus:open-output-folder',async()=>{await fs.mkdir(outputDir(),{recursive:true}); return shell.openPath(outputDir())})
+  ipcMain.handle('cerberus:choose-output-folder',async()=>{
+    const result = await dialog.showOpenDialog(mainWindow, { title: 'Choose export folder', defaultPath: outputDir(), properties: ['openDirectory', 'createDirectory'] })
+    if (result.canceled || !result.filePaths[0]) return { ok: false, canceled: true, outputDir: outputDir() }
+    configuredOutputDir = result.filePaths[0]
+    await fs.mkdir(configuredOutputDir, { recursive: true })
+    await persistOutputFolder()
+    return { ok: true, outputDir: outputDir() }
+  })
+  ipcMain.handle('cerberus:reset-output-folder',async()=>{
+    configuredOutputDir = ''
+    await persistOutputFolder()
+    await fs.mkdir(outputDir(), { recursive: true })
+    return { ok: true, outputDir: outputDir() }
+  })
   ipcMain.handle('cerberus:load-latest',async()=>{const latest=await findLatest(); if(!latest) return {ok:false,error:'No saved store JSON files found in the output folder.'}; return {ok:true,filename:latest.name,modified:new Date(latest.mtimeMs).toISOString(),store:latest.store}})
   ipcMain.handle('cerberus:import-image',async(_e,url)=>{try{return {ok:true,dataUrl:await importImage(url)}}catch(err){return {ok:false,error:err.message}}})
   ipcMain.handle('cerberus:save-release',async(_e,{store,channel})=>{

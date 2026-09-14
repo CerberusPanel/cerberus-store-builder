@@ -8,6 +8,11 @@ contextBridge.exposeInMainWorld('cerberusDesktop', {
   saveRelease: payload => ipcRenderer.invoke('cerberus:save-release', payload),
   importImage: url => ipcRenderer.invoke('cerberus:import-image', url),
   openOutputFolder: () => ipcRenderer.invoke('cerberus:open-output-folder'),
+  chooseOutputFolder: () => ipcRenderer.invoke('cerberus:choose-output-folder'),
+  resetOutputFolder: () => ipcRenderer.invoke('cerberus:reset-output-folder'),
+  setHotkeys: hotkeys => ipcRenderer.invoke('cerberus:set-hotkeys', hotkeys),
+  resetHotkeys: () => ipcRenderer.invoke('cerberus:reset-hotkeys'),
+  setShortcutCapture: active => ipcRenderer.send('cerberus:set-shortcut-capture', Boolean(active)),
   setTitlebarTheme: theme => ipcRenderer.send('cerberus:set-titlebar-theme', theme),
   onMenuAction: callback => {
     const listener = (_event, action) => callback(action)

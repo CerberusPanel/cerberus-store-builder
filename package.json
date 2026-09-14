@@ -3,12 +3,13 @@
 	"productName": "Cerberus Store Builder",
 	"description": "Build, validate, version and export self-contained Cerberus app store release files.",
 	"homepage": "https://github.com/CerberusPanel/cerberus-store-builder",
+	"license": "PolyForm-Noncommercial-1.0.0",
 	"author": {
 		"name": "Ryvor",
 		"email": "rsmith_20@outlook.com"
 	},
 	"private": true,
-	"version": "1.0.0-beta-1",
+	"version": "1.0.0-beta2",
 	"type": "module",
 	"main": "electron/main.js",
 	"scripts": {
@@ -22,6 +23,7 @@
 		"preview": "vite preview"
 	},
 	"dependencies": {
+		"@mdi/js": "^7.4.47",
 		"@vitejs/plugin-vue": "latest",
 		"vite": "latest",
 		"vue": "latest"
@@ -46,6 +48,12 @@
 			"package.json",
 			"build/logo-transparent.png"
 		],
+		"extraResources": [
+			{
+				"from": "build/com.ryvor.CerberusStoreBuilder.metainfo.xml",
+				"to": "com.ryvor.CerberusStoreBuilder.metainfo.xml"
+			}
+		],
 		"asar": true,
 		"mac": {
 			"category": "public.app-category.developer-tools",
@@ -57,20 +65,38 @@
 		"win": {
 			"target": [
 				{
-				"target": "nsis",
-				"arch": [
-					"x64",
-					"arm64"
-				]
+					"target": "nsis",
+					"arch": [
+						"x64",
+						"arm64"
+					]
 				}
 			]
 		},
 		"linux": {
 			"category": "Development",
+			"synopsis": "Create and publish Cerberus app-store release files.",
+			"description": "Create, validate, version, and export self-contained Cerberus app-store release files with version-specific deployment configuration.",
+			"maintainer": "Ryvor <rsmith_20@outlook.com>",
+			"vendor": "Cerberus",
+			"desktop": {
+				"entry": {
+					"Name": "Cerberus Store Builder",
+					"Comment": "Create and publish Cerberus app-store release files",
+					"Categories": "Development;",
+					"Keywords": "cerberus;app store;deployment;docker;"
+				}
+			},
 			"target": [
 				"AppImage",
 				"deb"
 			]
+		},
+		"deb": {
+			"packageCategory": "devel",
+			"priority": "optional",
+			"afterInstall": "build/deb-postinstall.sh",
+			"afterRemove": "build/deb-postremove.sh"
 		},
 		"nsis": {
 			"oneClick": false,

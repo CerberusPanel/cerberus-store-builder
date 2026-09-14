@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>com.ryvor.CerberusStoreBuilder</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>LicenseRef-PolyForm-Noncommercial-1.0.0</project_license>
+  <name>Cerberus Store Builder</name>
+  <summary>Create and publish Cerberus app-store release files</summary>
+  <description>
+    <p>Cerberus Store Builder is a desktop editor for creating, validating, versioning, and exporting Cerberus app-store release files.</p>
+    <p>It provides version-specific deployment configuration for environment variables, ports, and volumes.</p>
+  </description>
+  <developer_name>Ryvor</developer_name>
+  <launchable type="desktop-id">cerberus-store-builder.desktop</launchable>
+  <url type="homepage">https://github.com/CerberusPanel/cerberus-store-builder</url>
+  <url type="bugtracker">https://github.com/CerberusPanel/cerberus-store-builder/issues</url>
+  <url type="vcs-browser">https://github.com/CerberusPanel/cerberus-store-builder</url>
+  <icon type="stock">cerberus-store-builder</icon>
+  <categories>
+    <category>Development</category>
+  </categories>
+  <releases>
+    <release version="1.0.0-beta2" date="2026-09-14"/>
+  </releases>
+</component>

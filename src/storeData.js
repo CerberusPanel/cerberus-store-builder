@@ -21,8 +21,7 @@ export function createBlankApp(index = 1) {
     links: {},
     deployments: {
       latest: {
-        container_name: id,
-        image: '',
+        environment: [],
         ports: [],
         volumes: [],
       },
