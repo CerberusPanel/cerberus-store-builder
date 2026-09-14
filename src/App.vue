@@ -1,74 +1,38 @@
 <script setup>
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { mdiAlert, mdiArrowRight, mdiChevronDown, mdiChevronRight, mdiCircleSmall, mdiClose, mdiCog, mdiExportVariant, mdiFolderOpen, mdiMagnify, mdiPlus, mdiRedo, mdiThemeLightDark, mdiUndo, mdiWeatherNight, mdiWhiteBalanceSunny } from '@mdi/js'
-import { createBlankApp, starterStore } from './storeData'
-import MdiIcon from './MdiIcon.vue'
+import { mdiAlert, mdiChevronRight, mdiCircleSmall, mdiClose, mdiCog, mdiDelete, mdiFolderCogOutline, mdiKeyboardOutline, mdiPaletteOutline, mdiThemeLightDark, mdiWeatherNight, mdiWhiteBalanceSunny } from '@mdi/js'
+import { createBlankApp, normaliseStore, starterStore } from './storeData'
+import AppSidebar from './components/AppSidebar.vue'
+import MdiIcon from './components/MdiIcon.vue'
+import WorkspaceHeader from './components/WorkspaceHeader.vue'
+import DeploymentsPage from './pages/DeploymentsPage.vue'
+import JsonPreviewPage from './pages/JsonPreviewPage.vue'
+import { readDraft, useDraftHistory } from './composables/useDraftHistory'
+import { createLogoSet, fillMissingLogoResolutions, logoDataUrl, readFileAsDataUrl } from './services/logoProcessing'
+import { cleanForExport, getNextVersion } from './utils/release'
+import { orderAppJson, orderStoreJson } from './utils/jsonOrder'
+import { cleanName, isHttpUrl, slugify } from './utils/text'
+import { validateStore } from './utils/validation'
 
-const DRAFT_KEY = 'cerberus-store-builder:draft:v3'
 const THEME_KEY = 'cerberus-store-builder:theme'
-const MAX_HISTORY = 100
-
-function readDraft() {
-  try {
-    const parsed = JSON.parse(localStorage.getItem(DRAFT_KEY) || 'null')
-    if (parsed?.store && Array.isArray(parsed.store.apps)) return parsed
-  } catch {
-    // A corrupt browser draft should never prevent the editor from starting.
-  }
-  return null
-}
-
-function normalizeDeployments(store) {
-  for (const app of store?.apps ?? []) {
-    app.versions ??= []
-    if (Array.isArray(app.deployments)) {
-      app.deployments = Object.fromEntries(app.deployments
-        .filter(deployment => deployment?.name)
-        .map(({ name, image, ...deployment }) => [name, deployment]))
-    }
-    app.deployments ??= {}
-    if (!app.versions.length) app.versions.push({ tag: 'latest', label: 'Latest' })
-    for (const version of app.versions) {
-      version.tag = slugify(version.tag) || 'latest'
-      version.label ??= version.tag
-      app.deployments[version.tag] ??= { environment: [], ports: [], volumes: [] }
-    }
-    for (const key of Object.keys(app.deployments)) {
-      if (!app.versions.some(version => version.tag === key)) {
-        app.versions.push({ tag: key, label: key === 'latest' ? 'Latest' : key })
-      }
-    }
-    for (const deployment of Object.values(app.deployments)) {
-      deployment.environment ??= []
-      deployment.ports ??= []
-      deployment.volumes ??= []
-    }
-  }
-  return store
-}
-
-function deploymentImage(app, tag) {
-  const image = String(app?.image ?? '').trim().replace(/@[^@]+$/, '')
-  const base = image.replace(/:[^/]+$/, '')
-  return base ? `${base}:${tag}` : ''
-}
 
 const localDraft = readDraft()
-const storeData = ref(normalizeDeployments(structuredClone(localDraft?.store ?? starterStore)))
+const storeData = ref(normaliseStore(structuredClone(localDraft?.store ?? starterStore)))
 const selectedId = ref(localDraft?.selectedId ?? storeData.value.apps[0]?.id ?? null)
 const search = ref('')
 const metadataOpen = ref(false)
 const rawOpen = ref(false)
-const exportOpen = ref(false)
 const clearOpen = ref(false)
 const clearNudge = ref(false)
 const issuesOpen = ref(false)
 const settingsOpen = ref(false)
 const aboutOpen = ref(false)
+const deploymentsOpen = ref(false)
+const activeDeploymentIndex = ref(null)
 const hotkeyCapture = ref(null)
 const searchInput = ref(null)
 const toast = ref('')
-const activeTab = ref(localDraft?.activeTab ?? 'overview')
+const activeTab = ref(localDraft?.activeTab === 'json' ? 'json' : 'overview')
 const releaseChannel = ref(localDraft?.releaseChannel ?? 'alpha')
 const lastSaveFilename = ref(localDraft?.lastSaveFilename ?? '')
 const saving = ref(false)
@@ -85,27 +49,24 @@ const electronVersion = ref('')
 const chromeVersion = ref('')
 const nodeVersion = ref('')
 const desktopArch = ref('')
-const DEFAULT_HOTKEYS = { undo: 'Mod+Z', redo: 'Mod+Shift+Z', load: 'Mod+O', saveDraft: 'Mod+S', export: 'Mod+E', settings: 'Mod+,', about: 'F1', search: 'Mod+F', addApp: 'Mod+N', storeData: 'Mod+Shift+,' }
+const DEFAULT_HOTKEYS = { undo: 'Mod+Z', redo: 'Mod+Shift+Z', load: 'Mod+O', save: 'Mod+S', settings: 'Mod+,', about: 'F1', search: 'Mod+F', addApp: 'Mod+N', storeData: 'Mod+Shift+,' }
 const hotkeys = ref({ ...DEFAULT_HOTKEYS })
 const defaultHotkeys = ref({ ...DEFAULT_HOTKEYS })
 let removeMenuListener = null
 const storedTheme = localStorage.getItem(THEME_KEY)
 const themeMode = ref(['light', 'system', 'dark'].includes(storedTheme) ? storedTheme : 'system')
-const autosaveState = ref(localDraft ? 'Draft restored' : 'Autosave ready')
-const undoStack = ref([])
-const redoStack = ref([])
-let lastSnapshot = JSON.stringify(storeData.value)
-let historyTimer = null
-let autosaveTimer = null
-let suppressHistory = false
+const draftHistory = useDraftHistory({ storeData, selectedId, activeTab, releaseChannel, lastSaveFilename })
+const { autosaveState, undoStack, redoStack, lastSnapshot, persistDraft, undo, redo, resetHistory } = draftHistory
+if (localDraft) autosaveState.value = 'Draft restored'
 
 const selectedApp = computed(() =>
   storeData.value.apps.find(app => app.id === selectedId.value) ?? null,
 )
 
 function appSearchValues(app) {
-  const ports = Object.values(app.deployments ?? {}).flatMap(deployment =>
-    (deployment.ports ?? []).flatMap(port => [port.host, port.container, port.label]),
+  const ports = (app.deployments ?? []).flatMap(deployment => Array.isArray(deployment.ports)
+    ? deployment.ports.flatMap(port => [port.host, port.container, port.label])
+    : [deployment.ports],
   )
 
   return [
@@ -145,32 +106,11 @@ const searchMatchCount = computed(() => {
   return storeData.value.apps.filter(app => appMatchesSearch(app, query)).length
 })
 
-const latestVersion = computed(() => {
-  const app = selectedApp.value
-  if (!app) return null
-  return app.versions?.find(version => version.tag === 'latest') ?? app.versions?.[0] ?? null
-})
-
 const latestDeployment = computed(() => {
   const app = selectedApp.value
   if (!app) return null
-  return app.deployments?.latest ?? Object.values(app.deployments ?? {})[0] ?? null
+  return app.deployments?.find(deployment => deployment.name === 'latest') ?? app.deployments?.[0] ?? null
 })
-const deploymentClipboard = ref(null)
-const deploymentModalKey = ref(null)
-const collapsedDeployments = ref(new Set())
-const deploymentModal = computed(() => {
-  if (!deploymentModalKey.value || !selectedApp.value) return null
-  return selectedApp.value.deployments?.[deploymentModalKey.value] ?? null
-})
-
-function deploymentVersion(key) {
-  return selectedApp.value?.versions?.find(version => version.tag === key) ?? { tag: key, label: key }
-}
-
-function deploymentSummary(deployment) {
-  return `${deployment.environment?.length ?? 0} variables · ${deployment.ports?.length ?? 0} ports · ${deployment.volumes?.length ?? 0} volumes`
-}
 
 function systemPrefersDark() {
   return window.matchMedia?.('(prefers-color-scheme: dark)').matches ?? true
@@ -202,42 +142,14 @@ function flash(message) {
   }, 3000)
 }
 
-function slugify(value) {
-  return String(value ?? '')
-    .trim()
-    .toLowerCase()
-    .replace(/\s+/g, '-')
-    .replace(/[^a-z0-9._-]+/g, '-')
-    .replace(/-+/g, '-')
-    .replace(/^[._-]+|[._-]+$/g, '')
-}
-
-function cleanName(value) {
-  return String(value ?? '').replace(/\s+/g, ' ').trim()
-}
-
-function isHttpUrl(value) {
-  if (!value) return true
-  try {
-    const url = new URL(String(value))
-    return url.protocol === 'http:' || url.protocol === 'https:'
-  } catch {
-    return false
-  }
-}
-
-function isValidPort(value) {
-  return Number.isInteger(Number(value)) && Number(value) >= 1 && Number(value) <= 65535
-}
-
 function appIssue(app, field) {
   const issues = validationIssues.value
   return issues.find(issue => issue.appId === app?.id && issue.field === field)?.message ?? ''
 }
 
-function deploymentIssue(app, key, field, index = null) {
+function deploymentIssue(app, deploymentIndex, field, index = null) {
   return validationIssues.value.find(issue =>
-    issue.appId === app?.id && issue.deployment === key && issue.field === field && issue.index === index
+    issue.appId === app?.id && issue.deploymentIndex === deploymentIndex && issue.field === field && issue.index === index
   )?.message ?? ''
 }
 
@@ -248,150 +160,15 @@ function reviewIssue(issue) {
     return
   }
   selectedId.value = issue.appId
-  activeTab.value = issue.deployment ? 'builds' : 'overview'
+  activeTab.value = 'overview'
+  if (Number.isInteger(issue.deploymentIndex)) openDeployments(issue.deploymentIndex)
 }
 
-const validationIssues = computed(() => {
-  const issues = []
-  const add = (message, extra = {}) => issues.push({ message, ...extra })
-
-  if (!cleanName(storeData.value.name)) add('Store name is required.', { field: 'store-name' })
-  if (!/^\d+\.\d+\.\d+(?:-(?:alpha|beta)-\d+)?$/i.test(String(storeData.value.version ?? ''))) {
-    add('Store version must look like 0.0.0, 0.0.1-alpha-1 or 0.0.1-beta-1.', { field: 'store-version' })
-  }
-  if (!cleanName(storeData.value.author)) add('Store author is required.', { field: 'store-author' })
-
-  const ids = new Set()
-  for (const app of storeData.value.apps) {
-    if (!cleanName(app.name)) add(`App ${app.id || '(missing ID)'} needs a name.`, { appId: app.id, field: 'name' })
-    if (!app.id || !/^[a-z0-9][a-z0-9._-]*$/.test(app.id)) add(`${app.name || 'App'} has an invalid ID.`, { appId: app.id, field: 'id' })
-    if (ids.has(app.id)) add(`Duplicate app ID: ${app.id}.`, { appId: app.id, field: 'id' })
-    ids.add(app.id)
-    if (app.category && slugify(app.category) !== app.category) add(`${app.name}: category must be a slug.`, { appId: app.id, field: 'category' })
-    if (!app.image || /\s/.test(app.image)) add(`${app.name}: base Docker image is required and cannot contain spaces.`, { appId: app.id, field: 'image' })
-    if (app.readme && !isHttpUrl(app.readme)) add(`${app.name}: README must be an http(s) URL.`, { appId: app.id, field: 'readme' })
-
-    for (const [key, url] of Object.entries(app.links ?? {})) {
-      if (url && !isHttpUrl(url)) add(`${app.name}: link “${key}” is not a valid http(s) URL.`, { appId: app.id, field: `link:${key}` })
-    }
-
-    for (const [key, deployment] of Object.entries(app.deployments ?? {})) {
-      if (!key || slugify(key) !== key) add(`${app.name}: deployment key “${key}” is invalid.`, { appId: app.id, deployment: key, field: 'key', index: null })
-      for (const [index, port] of (deployment.ports ?? []).entries()) {
-        if (!isValidPort(port.host)) add(`${app.name}/${key}: host port must be 1–65535.`, { appId: app.id, deployment: key, field: 'host-port', index })
-        if (!isValidPort(port.container)) add(`${app.name}/${key}: container port must be 1–65535.`, { appId: app.id, deployment: key, field: 'container-port', index })
-        if (!['tcp', 'udp', 'both'].includes(String(port.protocol ?? 'tcp').toLowerCase())) add(`${app.name}/${key}: port protocol must be TCP, UDP, or TCP/UDP.`, { appId: app.id, deployment: key, field: 'protocol', index })
-      }
-      for (const [index, volume] of (deployment.volumes ?? []).entries()) {
-        if (!String(volume.host ?? '').trim()) add(`${app.name}/${key}: volume host is required.`, { appId: app.id, deployment: key, field: 'volume-host', index })
-        if (!String(volume.container ?? '').startsWith('/')) add(`${app.name}/${key}: container volume path must start with /.`, { appId: app.id, deployment: key, field: 'volume-container', index })
-      }
-      const environmentKeys = new Set()
-      for (const [index, variable] of (deployment.environment ?? []).entries()) {
-        const name = String(variable.name ?? '').trim()
-        if (!name) add(`${app.name}/${key}: environment variable name is required.`, { appId: app.id, deployment: key, field: 'environment-name', index })
-        if (name && environmentKeys.has(name)) add(`${app.name}/${key}: duplicate environment variable “${name}”.`, { appId: app.id, deployment: key, field: 'environment-name', index })
-        environmentKeys.add(name)
-      }
-    }
-  }
-  return issues
-})
+const validationIssues = computed(() => validateStore(storeData.value))
 
 const hasErrors = computed(() => validationIssues.value.length > 0)
 
-function persistDraft() {
-  try {
-    localStorage.setItem(DRAFT_KEY, JSON.stringify({
-      store: storeData.value,
-      selectedId: selectedId.value,
-      activeTab: activeTab.value,
-      releaseChannel: releaseChannel.value,
-      lastSaveFilename: lastSaveFilename.value,
-      savedAt: new Date().toISOString(),
-    }))
-    autosaveState.value = 'Autosaved'
-  } catch {
-    autosaveState.value = 'Autosave failed'
-  }
-}
-
-function scheduleAutosave() {
-  autosaveState.value = 'Saving draft…'
-  clearTimeout(autosaveTimer)
-  autosaveTimer = window.setTimeout(persistDraft, 250)
-}
-
-function scheduleHistorySnapshot() {
-  if (suppressHistory) return
-  clearTimeout(historyTimer)
-  historyTimer = window.setTimeout(() => {
-    const current = JSON.stringify(storeData.value)
-    if (current === lastSnapshot) return
-    undoStack.value.push(lastSnapshot)
-    if (undoStack.value.length > MAX_HISTORY) undoStack.value.shift()
-    lastSnapshot = current
-    redoStack.value = []
-  }, 350)
-}
-
-function applySnapshot(snapshot) {
-  suppressHistory = true
-  clearTimeout(historyTimer)
-  storeData.value = normalizeDeployments(JSON.parse(snapshot))
-  lastSnapshot = snapshot
-  if (!storeData.value.apps.some(app => app.id === selectedId.value)) {
-    selectedId.value = storeData.value.apps[0]?.id ?? null
-  }
-  window.setTimeout(() => { suppressHistory = false }, 0)
-  scheduleAutosave()
-}
-
-function undo() {
-  clearTimeout(historyTimer)
-  const current = JSON.stringify(storeData.value)
-  if (current !== lastSnapshot) {
-    redoStack.value.push(current)
-    applySnapshot(lastSnapshot)
-    return
-  }
-  const previous = undoStack.value.pop()
-  if (!previous) return
-  redoStack.value.push(current)
-  applySnapshot(previous)
-}
-
-function redo() {
-  clearTimeout(historyTimer)
-  const next = redoStack.value.pop()
-  if (!next) return
-  const current = JSON.stringify(storeData.value)
-  undoStack.value.push(current)
-  applySnapshot(next)
-}
-
-function resetHistory() {
-  clearTimeout(historyTimer)
-  undoStack.value = []
-  redoStack.value = []
-  lastSnapshot = JSON.stringify(storeData.value)
-}
-
-watch(storeData, () => {
-  scheduleHistorySnapshot()
-  scheduleAutosave()
-}, { deep: true, flush: 'post' })
-
-watch([selectedId, activeTab, releaseChannel, lastSaveFilename], scheduleAutosave)
-watch(selectedId, () => { logoImportUrl.value = '' })
-watch(() => selectedApp.value?.image, image => {
-  const app = selectedApp.value
-  if (!app) return
-  for (const deployment of Object.values(app.deployments ?? {})) {
-    deployment.environment ??= []
-    for (const port of deployment.ports ?? []) port.protocol ??= 'tcp'
-  }
-}, { immediate: true })
+watch(selectedId, () => { logoImportUrl.value = selectedApp.value?.logo?.source_url ?? '' }, { immediate: true })
 
 function addApp() {
   let i = storeData.value.apps.length + 1
@@ -404,7 +181,8 @@ function addApp() {
 
 function duplicateApp() {
   if (!selectedApp.value) return
-  const copy = structuredClone(selectedApp.value)
+  // JSON cloning unwraps Vue's reactive proxy so duplicate always succeeds.
+  const copy = JSON.parse(JSON.stringify(selectedApp.value))
   const base = `${copy.id}-copy`
   let id = base
   let i = 2
@@ -446,74 +224,30 @@ function cleanListValue(field, index) {
 
 function addListItem(field) { selectedApp.value[field] ??= []; selectedApp.value[field].push('') }
 function removeListItem(field, index) { selectedApp.value[field].splice(index, 1) }
-function addVersion() {
-  const app = selectedApp.value
-  app.versions ??= []
-  app.deployments ??= {}
-  let number = app.versions.length + 1
-  let tag = `v${number}`
-  while (app.deployments[tag]) tag = `v${++number}`
-  app.versions.push({ tag, label: `Version ${number}` })
-  app.deployments[tag] = { environment: [], ports: [], volumes: [] }
-  collapsedDeployments.value.delete(tag)
-  deploymentModalKey.value = tag
-}
-function renameVersion(index, value) {
-  const app = selectedApp.value
-  const version = app.versions[index]
-  const oldTag = version.tag
-  const tag = slugify(value)
-  if (!tag) { flash('Version ID cannot be empty.'); return }
-  if (tag !== oldTag && app.deployments?.[tag]) { flash(`A deployment for ${tag} already exists.`); return }
-  version.tag = tag
-  if (tag !== oldTag && app.deployments?.[oldTag]) {
-    app.deployments[tag] = app.deployments[oldTag]
-    delete app.deployments[oldTag]
-    if (collapsedDeployments.value.delete(oldTag)) collapsedDeployments.value.add(tag)
-    if (deploymentModalKey.value === oldTag) deploymentModalKey.value = tag
-  }
-}
-function removeVersion(index) {
-  const app = selectedApp.value
-  if (app.versions.length <= 1) { flash('Keep at least one version deployment.'); return }
-  const [version] = app.versions.splice(index, 1)
-  delete app.deployments?.[version.tag]
-  if (deploymentModalKey.value === version.tag) deploymentModalKey.value = null
-}
-
-function renameDeployment(oldKey, newKey) {
-  const trimmed = slugify(newKey)
-  if (!trimmed || trimmed === oldKey || selectedApp.value.deployments[trimmed]) return
-  selectedApp.value.deployments[trimmed] = selectedApp.value.deployments[oldKey]
-  delete selectedApp.value.deployments[oldKey]
-}
-
 function addDeployment() {
-  addVersion()
+  let i = 1
+  let key = `v${i}`
+  while (selectedApp.value.deployments?.some(deployment => deployment.name === key)) key = `v${++i}`
+  selectedApp.value.deployments ??= []
+  selectedApp.value.deployments.push({ name: key, version: key, ports: [], volumes: [], environments: [] })
 }
 
-function removeDeployment(key) {
-  const index = selectedApp.value.versions?.findIndex(version => version.tag === key) ?? -1
-  if (index >= 0) removeVersion(index)
-  else delete selectedApp.value.deployments[key]
+function openDeployments(index = null) {
+  activeDeploymentIndex.value = index
+  deploymentsOpen.value = true
 }
-function toggleDeployment(key) {
-  const next = new Set(collapsedDeployments.value)
-  next.has(key) ? next.delete(key) : next.add(key)
-  collapsedDeployments.value = next
+function closeDeployments() {
+  deploymentsOpen.value = false
+  activeDeploymentIndex.value = null
 }
-function copyDeployment(key) {
-  deploymentClipboard.value = structuredClone(selectedApp.value.deployments[key])
-  flash(`Copied ${deploymentVersion(key).label || key} configuration.`)
+
+function removeDeployment(index) {
+  if (selectedApp.value.deployments?.length <= 1) { flash('Keep at least one deployment.'); return }
+  selectedApp.value.deployments.splice(index, 1)
 }
-function pasteDeployment(key) {
-  if (!deploymentClipboard.value) { flash('Copy a deployment configuration first.'); return }
-  selectedApp.value.deployments[key] = structuredClone(deploymentClipboard.value)
-  flash(`Pasted configuration into ${deploymentVersion(key).label || key}.`)
-}
-function addEnvironment(deployment) { deployment.environment ??= []; deployment.environment.push({ name: '', value: '' }) }
-function addPort(deployment) { deployment.ports ??= []; deployment.ports.push({ host: 8080, container: 8080, protocol: 'tcp', label: 'Web UI' }) }
-function addVolume(deployment) { deployment.volumes ??= []; deployment.volumes.push({ host: '', container: '', label: '' }) }
+function addPort(deployment) { deployment.ports ??= []; deployment.ports.push({ host: 8080, container: 8080, protocol: 'tcp', label: 'Web UI', editable: false, required: false }) }
+function addVolume(deployment) { deployment.volumes ??= []; deployment.volumes.push({ host: '', container: '', label: '', editable: false, required: false }) }
+function addEnvironment(deployment) { deployment.environments ??= []; deployment.environments.push({ name: '', value: '', editable: false, required: false }) }
 function removeArrayItem(array, index) { array.splice(index, 1) }
 
 function addLink() {
@@ -530,64 +264,14 @@ function renameLink(oldKey, newKey) {
 }
 function removeLink(key) { delete selectedApp.value.links[key] }
 
-function logoDataUrl(base64) {
-  return base64 ? `data:image/png;base64,${base64}` : ''
-}
-
-function readFileAsDataUrl(file) {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader()
-    reader.onload = () => resolve(String(reader.result || ''))
-    reader.onerror = () => reject(new Error('Could not read the selected image.'))
-    reader.readAsDataURL(file)
-  })
-}
-
-function loadImage(source) {
-  return new Promise((resolve, reject) => {
-    const image = new Image()
-    image.onload = () => resolve(image)
-    image.onerror = () => reject(new Error('The image could not be decoded.'))
-    image.src = source
-  })
-}
-
-function renderLogoSize(image, size) {
-  const canvas = document.createElement('canvas')
-  canvas.width = size
-  canvas.height = size
-  const context = canvas.getContext('2d')
-  if (!context) throw new Error('Canvas image processing is unavailable in this browser.')
-
-  context.clearRect(0, 0, size, size)
-  context.imageSmoothingEnabled = true
-  context.imageSmoothingQuality = 'high'
-
-  const sourceWidth = image.naturalWidth || image.width
-  const sourceHeight = image.naturalHeight || image.height
-  const scale = Math.min(size / sourceWidth, size / sourceHeight)
-  const width = Math.max(1, Math.round(sourceWidth * scale))
-  const height = Math.max(1, Math.round(sourceHeight * scale))
-  const x = Math.round((size - width) / 2)
-  const y = Math.round((size - height) / 2)
-  context.drawImage(image, x, y, width, height)
-
-  return canvas.toDataURL('image/png');
-}
-
-async function setLogoFromSource(source) {
+/** Generate all current logo sizes and retain the source URL when available. */
+async function setLogoFromSource(source, sourceUrl = '') {
   if (!selectedApp.value) return
   logoBusy.value = true
   try {
-    const image = await loadImage(source)
-    if (!(image.naturalWidth || image.width) || !(image.naturalHeight || image.height)) {
-      throw new Error('The selected image has invalid dimensions.')
-    }
-
     selectedApp.value.logo = {
-      x32: renderLogoSize(image, 32),
-      x64: renderLogoSize(image, 64),
-      x128: renderLogoSize(image, 128),
+      ...(sourceUrl ? { source_url: sourceUrl } : {}),
+      ...await createLogoSet(source),
     }
     flash('Logo generated at 32px, 64px and 128px.')
   } catch (error) {
@@ -595,6 +279,35 @@ async function setLogoFromSource(source) {
   } finally {
     logoBusy.value = false
   }
+}
+
+/** Fetch an image through the desktop bridge or web API and return a data URL. */
+async function fetchLogoSource(url) {
+  if (desktopApi) {
+    const result = await desktopApi.importImage(url)
+    if (!result?.ok) throw new Error(result?.error || 'Could not import that image URL.')
+    return result.dataUrl
+  }
+  const response = await fetch('/api/image', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ url }),
+  })
+  const result = await response.json()
+  if (!response.ok || !result?.ok) throw new Error(result?.error || 'Could not import that image URL.')
+  return result.dataUrl
+}
+
+/** Restore missing logo sizes when opening a draft or saved store document. */
+async function populateMissingLogoResolutions() {
+  let restored = 0
+  for (const app of storeData.value.apps) {
+    if (!app.logo) continue
+    try {
+      if (await fillMissingLogoResolutions(app.logo, fetchLogoSource)) restored++
+    } catch {
+      // Keep the app usable if its historical source URL is no longer reachable.
+    }
+  }
+  if (restored) flash(`Restored missing logo resolution${restored === 1 ? '' : 's'}.`)
 }
 
 async function handleLogoUpload(event) {
@@ -628,21 +341,9 @@ async function importLogoFromUrl() {
 
   logoBusy.value = true
   try {
-    let result
-    if (desktopApi) {
-      result = await desktopApi.importImage(url)
-    } else {
-      const response = await fetch('/api/image', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ url }),
-      })
-      result = await response.json()
-      if (!response.ok) throw new Error(result.error || 'Could not import that image URL.')
-    }
-    if (!result.ok) throw new Error(result.error || 'Could not import that image URL.')
+    const source = await fetchLogoSource(url)
     logoBusy.value = false
-    await setLogoFromSource(result.dataUrl)
+    await setLogoFromSource(source, url)
   } catch (error) {
     logoBusy.value = false
     flash(error.message || 'Could not import that image URL.')
@@ -654,46 +355,6 @@ function removeLogo() {
   delete selectedApp.value.logo
   logoImportUrl.value = ''
   flash('Logo removed.')
-}
-
-function cleanForExport(value) {
-  if (Array.isArray(value)) return value.map(cleanForExport)
-  if (value && typeof value === 'object') {
-    return Object.fromEntries(Object.entries(value).filter(([, v]) => v !== undefined && v !== null && v !== '').map(([k, v]) => [k, cleanForExport(v)]))
-  }
-  return value
-}
-
-function buildExportPayload() {
-  const release = structuredClone(storeData.value)
-  for (const app of release.apps ?? []) {
-    const deploymentMap = app.deployments ?? {}
-    app.deployments = (app.versions ?? []).map(version => {
-      const deployment = structuredClone(deploymentMap[version.tag] ?? {})
-      return {
-        name: version.tag,
-        image: deploymentImage(app, version.tag),
-        ports: deployment.ports ?? [],
-        volumes: deployment.volumes ?? [],
-        environment: deployment.environment ?? [],
-      }
-    })
-  }
-  return cleanForExport(release)
-}
-
-function parseVersion(value = '0.0.0') {
-  const normalized = String(value).trim().toLowerCase().replace(/-([a-z]+)\/(\d+)$/, '-$1-$2')
-  const match = normalized.match(/^(\d+)\.(\d+)\.(\d+)(?:-(alpha|beta)-(\d+))?$/)
-  if (!match) return { major: 0, minor: 0, patch: 0, channel: null, channelVersion: 0 }
-  return { major: Number(match[1]), minor: Number(match[2]), patch: Number(match[3]), channel: match[4] ?? null, channelVersion: Number(match[5] ?? 0) }
-}
-function getNextVersion(currentVersion, channel) {
-  const current = parseVersion(currentVersion)
-  const base = `${current.major}.${current.minor}.${current.patch}`
-  if (channel === 'public') return `${current.major}.${current.minor}.${current.patch + 1}`
-  const channelVersion = current.channel === channel ? current.channelVersion + 1 : 1
-  return `${base}-${channel}-${channelVersion}`
 }
 
 async function loadLastSave() {
@@ -708,7 +369,9 @@ async function loadLastSave() {
       if (!response.ok) throw new Error(result.error || 'Could not load the latest save.')
     }
     if (!result.ok) throw new Error(result.error || 'Could not load the latest save.')
-    storeData.value = normalizeDeployments(result.store)
+    storeData.value = normaliseStore(result.store)
+    storeData.value.version = releaseBaseVersion(storeData.value.version)
+    await populateMissingLogoResolutions()
     selectedId.value = storeData.value.apps[0]?.id ?? null
     lastSaveFilename.value = result.filename
     resetHistory()
@@ -718,41 +381,30 @@ async function loadLastSave() {
   finally { saving.value = false }
 }
 
-function saveDraft() {
-  persistDraft()
-  flash('Draft saved to local storage.')
-}
-
-function requestExport() {
+async function saveRelease() {
   if (hasErrors.value) {
-    flash(`Cannot export: ${validationIssues.value[0].message}`)
-    return
-  }
-  exportOpen.value = true
-}
-
-async function exportRelease() {
-  exportOpen.value = false
-  if (hasErrors.value) {
-    flash(`Cannot export: ${validationIssues.value[0].message}`)
+    flash(`Cannot save: ${validationIssues.value[0].message}`)
     return
   }
   saving.value = true
-  const payload = buildExportPayload()
   try {
+    // JSON cloning unwraps Vue's reactive proxy before normalising the export.
+    // This avoids DataCloneError while retaining the live editor state.
+    const storeSnapshot = JSON.parse(JSON.stringify(storeData.value))
+    const payload = cleanForExport(orderStoreJson(normaliseStore(storeSnapshot)))
     let result
     if (desktopApi) {
       result = await desktopApi.saveRelease({ store: payload, channel: releaseChannel.value })
     } else {
       const response = await fetch('/api/save', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ store: payload, channel: releaseChannel.value }) })
       result = await response.json()
-      if (!response.ok) throw new Error(result.error || 'Export failed.')
+      if (!response.ok) throw new Error(result.error || 'Save failed.')
     }
-    if (!result.ok) throw new Error(result.error || 'Export failed.')
-    storeData.value.version = result.version
+    if (!result.ok) throw new Error(result.error || 'Save failed.')
+    storeData.value.version = releaseBaseVersion(result.version)
     lastSaveFilename.value = result.filename
     persistDraft()
-    flash(`Exported ${result.filename}`)
+    flash(`Saved ${result.filename}`)
   } catch (error) { flash(error.message) }
   finally { saving.value = false }
 }
@@ -823,8 +475,7 @@ const HOTKEY_ACTIONS = [
   { key: 'undo', label: 'Undo', description: 'Undo the most recent editor change.' },
   { key: 'redo', label: 'Redo', description: 'Redo the most recently undone change.' },
   { key: 'load', label: 'Load last save', description: 'Load the newest valid store file from the output folder.' },
-  { key: 'saveDraft', label: 'Save draft', description: 'Save the working draft to local storage.' },
-  { key: 'export', label: 'Export release', description: 'Confirm and export the next versioned store release.' },
+  { key: 'save', label: 'Save release', description: 'Save the next versioned store release.' },
   { key: 'search', label: 'Search applications', description: 'Focus the application search box.' },
   { key: 'addApp', label: 'Add application', description: 'Create a new blank application.' },
   { key: 'storeData', label: 'Store data', description: 'Open the store metadata editor.' },
@@ -936,8 +587,7 @@ function runHotkeyAction(action) {
   if (action === 'undo') undo()
   else if (action === 'redo') redo()
   else if (action === 'load') loadLastSave()
-  else if (action === 'saveDraft') saveDraft()
-  else if (action === 'export') requestExport()
+  else if (action === 'save') saveRelease()
   else if (action === 'settings') settingsOpen.value = true
   else if (action === 'about') aboutOpen.value = true
   else if (action === 'search') { searchInput.value?.focus(); searchInput.value?.select?.() }
@@ -983,8 +633,7 @@ onMounted(async () => {
     defaultHotkeys.value = { ...DEFAULT_HOTKEYS, ...(info.defaultHotkeys || {}) }
     removeMenuListener = desktopApi.onMenuAction(action => {
       if (action === 'load') loadLastSave()
-      if (action === 'save-draft') saveDraft()
-      if (action === 'export') requestExport()
+      if (action === 'save') saveRelease()
       if (action === 'settings') settingsOpen.value = true
       if (action === 'about') aboutOpen.value = true
       if (action === 'undo') undo()
@@ -996,130 +645,76 @@ onMounted(async () => {
   } else {
     try { hotkeys.value = { ...DEFAULT_HOTKEYS, ...JSON.parse(localStorage.getItem('cerberus-store-builder:hotkeys') || '{}') } } catch {}
   }
+  await populateMissingLogoResolutions()
 })
 onBeforeUnmount(() => {
   window.removeEventListener('keydown', handleKeyboard)
   window.matchMedia?.('(prefers-color-scheme: dark)').removeEventListener?.('change', handleSystemThemeChange)
   removeMenuListener?.()
-  clearTimeout(historyTimer)
-  clearTimeout(autosaveTimer)
+  draftHistory.dispose()
   persistDraft()
 })
 
-const nextReleaseVersion = computed(() => getNextVersion(storeData.value.version, releaseChannel.value))
-const prettyJson = computed(() => JSON.stringify(storeData.value, null, 2))
-const minifiedJson = computed(() => JSON.stringify(cleanForExport(storeData.value)))
+function releaseBaseVersion(value) {
+  const match = String(value ?? '').trim().match(/^\d+\.\d+\.\d+/)
+  return match?.[0] ?? '0.0.0'
+}
+const baseStoreVersion = computed({
+  get: () => releaseBaseVersion(storeData.value.version),
+  set: value => { storeData.value.version = releaseBaseVersion(value) },
+})
+const nextReleaseVersion = computed(() => getNextVersion(baseStoreVersion.value, releaseChannel.value))
+// The preview is an editor aid: show only the application currently in focus.
+// Save Release still serialises the complete store document above.
+// Preview the reactive editor model directly. Export-only cleanup belongs in
+// saveRelease(), so this view always includes the user's current in-progress
+// values rather than a cleaned or previously saved representation.
+const prettyJson = computed(() => JSON.stringify(orderAppJson(selectedApp.value), null, 2))
+const minifiedJson = computed(() => JSON.stringify(orderAppJson(selectedApp.value)))
 </script>
 
 <template>
   <div class="app-shell" :class="{ 'desktop-shell': isDesktop, [`platform-${desktopPlatform}`]: isDesktop }">
     <div v-if="isDesktop" class="desktop-titlebar">
       <div class="desktop-brand">
-        <span class="desktop-mark"><img src="/logo-transparent.png" alt="Cerberus logo" /></span>
+        <span class="desktop-mark"><img src="/logo.png" alt="Cerberus logo" /></span>
         <span>Cerberus Store Builder</span>
       </div>
       <div class="desktop-document">{{ lastSaveFilename || 'Unsaved store' }}</div>
     </div>
-    <header class="topbar">
-      <div class="workspace-title">
-        <div class="workspace-title-icon"><img src="/logo-transparent.png" alt="Cerberus logo" /></div>
-        <div>
-          <div class="eyebrow">STORE WORKSPACE</div>
-          <h1>{{ storeData.name || 'Untitled Store' }}</h1>
-        </div>
-      </div>
-      <div class="top-actions">
-        <div class="toolbar-group draft-tools" aria-label="Draft controls">
-          <div class="autosave-indicator" title="Local draft status"><span class="autosave-dot"></span>{{ autosaveState }}</div>
-          <div class="history-actions">
-            <button class="button ghost compact-button icon-text-button" :disabled="!undoStack.length && JSON.stringify(storeData) === lastSnapshot"  :title="`Undo (${displayHotkey(hotkeys.undo)})`" @click="undo"><MdiIcon :path="mdiUndo" :size="15" /><span class="button-label">Undo</span></button>
-            <button class="button ghost compact-button icon-text-button" :disabled="!redoStack.length"  :title="`Redo (${displayHotkey(hotkeys.redo)})`" @click="redo"><MdiIcon :path="mdiRedo" :size="15" /><span class="button-label">Redo</span></button>
-          </div>
-        </div>
-
-        <div class="toolbar-group store-tools" aria-label="Store controls">
-          <button class="button ghost compact-button" :disabled="saving" @click="loadLastSave">Load save</button>
-          <button class="button ghost compact-button" @click="metadataOpen = true">Store data</button>
-        </div>
-
-        <div class="toolbar-group release-tools" aria-label="Release controls">
-          <label class="release-channel">
-            <span>Channel</span>
-            <select v-model="releaseChannel">
-              <option value="alpha">Alpha</option>
-              <option value="beta">Beta</option>
-              <option value="public">Public</option>
-            </select>
-          </label>
-          <div class="release-preview">
-            <span>Next release</span>
-            <strong>{{ nextReleaseVersion }}</strong>
-          </div>
-          <div class="save-area">
-            <button v-if="hasErrors" class="error-count issue-button" type="button" title="Review validation issues" @click="issuesOpen = true">{{ validationIssues.length }} issue{{ validationIssues.length === 1 ? '' : 's' }}</button>
-            <button class="button primary compact-button save-button" :disabled="saving || hasErrors" @click="requestExport">
-              {{ saving ? 'Working…' : 'Export' }}
-            </button>
-          </div>
-        </div>
-
-        <div class="toolbar-group appearance-tools" aria-label="Application settings">
-          <button class="button ghost compact-button settings-button"  :title="`Settings (${displayHotkey(hotkeys.settings)})`" @click="settingsOpen = true">
-            <MdiIcon :path="mdiCog" :size="15" /><span class="button-label">Settings</span>
-          </button>
-        </div>
-      </div>
-    </header>
+    <WorkspaceHeader
+      :store-name="storeData.name"
+      :undo-count="undoStack.length"
+      :redo-count="redoStack.length"
+      :has-unsaved-change="JSON.stringify(storeData) !== lastSnapshot"
+      :hotkeys="hotkeys"
+      :display-hotkey="displayHotkey"
+      :saving="saving"
+      :next-release-version="nextReleaseVersion"
+      :has-errors="hasErrors"
+      :issue-count="validationIssues.length"
+      @undo="undo"
+      @redo="redo"
+      @open-metadata="metadataOpen = true"
+      @open-issues="issuesOpen = true"
+      @save="saveRelease"
+    />
 
     <div class="workspace">
-      <aside class="sidebar">
-        <div class="sidebar-head">
-          <div>
-            <span class="muted">Applications</span>
-            <strong>{{ storeData.apps.length }}</strong>
-          </div>
-          <button class="icon-button" title="Add app" @click="addApp"><MdiIcon :path="mdiPlus" title="Add app" /></button>
-        </div>
-
-        <div class="sidebar-search">
-          <div class="search-box">
-            <MdiIcon class="search-icon" :path="mdiMagnify" :size="16" />
-            <input ref="searchInput" v-model="search" class="search" placeholder="Search apps…" aria-label="Search applications" />
-            <button v-if="search" class="search-clear" title="Clear search" @click="search = ''"><MdiIcon :path="mdiClose" :size="15" /></button>
-          </div>
-          <span v-if="search" class="search-count">{{ searchMatchCount }} match{{ searchMatchCount === 1 ? '' : 'es' }}</span>
-        </div>
-
-        <div class="app-list">
-          <button
-            v-for="item in filteredApps"
-            :key="item.app.id"
-            class="app-row"
-            :class="{ selected: item.app.id === selectedId, 'search-miss': !item.matches }"
-            :title="!item.matches ? 'Currently open — does not match this search' : ''"
-            @click="item.matches && (selectedId = item.app.id)"
-          >
-            <div class="app-avatar">
-              <img v-if="item.app.logo?.x32" :src="logoDataUrl(item.app.logo.x32)" :alt="`${item.app.name || item.app.id} logo`" />
-              <span v-else>{{ (item.app.name || item.app.id || '?').slice(0, 1).toUpperCase() }}</span>
-            </div>
-            <div class="app-row-text">
-              <strong>{{ item.app.name || 'Unnamed app' }}</strong>
-              <span>{{ item.app.id || 'missing-id' }}</span>
-            </div>
-            <span class="category-pill">{{ item.app.category || 'uncategorised' }}</span>
-          </button>
-          <div v-if="search && searchMatchCount === 0 && !selectedApp" class="sidebar-empty">No applications match this search.</div>
-        </div>
-
-        <div class="sidebar-footer">
-          <div class="sidebar-footer-row">
-            <button class="text-button danger-text" @click="requestClear">Clear</button>
-            <button v-if="isDesktop" class="text-button icon-text-button" title="Open output folder" @click="openOutputFolder">Output folder <MdiIcon :path="mdiFolderOpen" :size="14" /></button>
-          </div>
-          <span>{{ lastSaveFilename || 'No save loaded' }}</span>
-        </div>
-      </aside>
+      <AppSidebar
+        ref="searchInput"
+        v-model:search="search"
+        :apps="storeData.apps"
+        :filtered-apps="filteredApps"
+        :selected-id="selectedId"
+        :search-match-count="searchMatchCount"
+        :last-save-filename="lastSaveFilename"
+        :is-desktop="isDesktop"
+        @add-app="addApp"
+        @select-app="selectedId = $event"
+        @clear-draft="requestClear"
+        @open-output-folder="openOutputFolder"
+      />
 
       <main v-if="selectedApp" class="editor">
         <section class="editor-hero">
@@ -1131,18 +726,18 @@ const minifiedJson = computed(() => JSON.stringify(cleanForExport(storeData.valu
               <MdiIcon :path="mdiCircleSmall" :size="12" />
               <span>{{ selectedApp.category || 'No category' }}</span>
               <MdiIcon :path="mdiCircleSmall" :size="12" />
-              <span>{{ selectedApp.versions?.length ?? 0 }} deployment(s)</span>
+              <span>{{ selectedApp.deployments?.length ?? 0 }} deployment(s)</span>
             </div>
           </div>
           <div class="hero-actions">
             <button class="button ghost" @click="duplicateApp">Duplicate</button>
+            <button class="button ghost" @click="openDeployments()">Deployments</button>
             <button class="button danger" @click="deleteApp">Delete</button>
           </div>
         </section>
 
         <nav class="tabs">
           <button :class="{ active: activeTab === 'overview' }" @click="activeTab = 'overview'">Overview</button>
-          <!-- button :class="{ active: activeTab === 'builds' }" @click="activeTab = 'builds'">Deployments</!-- -->
           <button :class="{ active: activeTab === 'json' }" @click="activeTab = 'json'">JSON preview</button>
         </nav>
 
@@ -1209,11 +804,11 @@ const minifiedJson = computed(() => JSON.stringify(cleanForExport(storeData.valu
                   </label>
                   <span class="logo-or">or</span>
                   <div class="logo-url-row">
-                    <input v-model.trim="logoImportUrl" type="url" placeholder="https://example.com/logo.png" :disabled="logoBusy" @keyup.enter="importLogoFromUrl" />
-                    <button class="button ghost" :disabled="logoBusy || !logoImportUrl" @click="importLogoFromUrl">Import URL</button>
+                    <input v-model.trim="logoImportUrl" type="url" placeholder="Original image URL (https://…)" :disabled="logoBusy" @keyup.enter="importLogoFromUrl" />
+                    <button class="button ghost" :disabled="logoBusy || !logoImportUrl" @click="importLogoFromUrl">Save & import</button>
                   </div>
                 </div>
-                <p class="logo-help">Images are fitted without cropping onto transparent square canvases and stored as Base64 PNG at 32×32, 64×64 and 128×128.</p>
+                <p class="logo-help">The original URL is stored with the logo. Images are fitted without cropping onto transparent square canvases and saved as PNG data URLs at 32×32, 64×64 and 128×128.</p>
                 <div v-if="selectedApp.logo?.x32" class="logo-resolution-preview">
                   <div><img :src="logoDataUrl(selectedApp.logo.x32)" alt="32px preview" /><span>32</span></div>
                   <div><img :src="logoDataUrl(selectedApp.logo.x64)" alt="64px preview" /><span>64</span></div>
@@ -1231,7 +826,7 @@ const minifiedJson = computed(() => JSON.stringify(cleanForExport(storeData.valu
             <div class="stack">
               <div v-for="(_, index) in selectedApp.tags" :key="index" class="inline-row">
                 <input v-model="selectedApp.tags[index]" placeholder="docker" @blur="cleanListValue('tags', index)" />
-                <button class="remove" title="Remove tag" @click="removeListItem('tags', index)"><MdiIcon :path="mdiClose" :size="16" /></button>
+                <button class="remove" title="Remove tag" @click="removeListItem('tags', index)"><MdiIcon :path="mdiDelete" :size="15" /></button>
               </div>
               <p v-if="!selectedApp.tags?.length" class="empty">No tags yet.</p>
             </div>
@@ -1245,7 +840,7 @@ const minifiedJson = computed(() => JSON.stringify(cleanForExport(storeData.valu
             <div class="stack">
               <div v-for="(_, index) in selectedApp.highlights" :key="index" class="inline-row">
                 <input v-model="selectedApp.highlights[index]" placeholder="Lightweight" @blur="cleanListValue('highlights', index)" />
-                <button class="remove" title="Remove highlight" @click="removeListItem('highlights', index)"><MdiIcon :path="mdiClose" :size="16" /></button>
+                <button class="remove" title="Remove highlight" @click="removeListItem('highlights', index)"><MdiIcon :path="mdiDelete" :size="15" /></button>
               </div>
               <p v-if="!selectedApp.highlights?.length" class="empty">No highlights yet.</p>
             </div>
@@ -1253,15 +848,14 @@ const minifiedJson = computed(() => JSON.stringify(cleanForExport(storeData.valu
 
           <section class="panel">
             <div class="panel-title compact">
-              <div><span class="muted">Deployment source</span><h3>Versions</h3></div>
-              <button class="small-button" @click="addVersion">Add version</button>
+              <div><span class="muted">Release configuration</span><h3>Versions</h3></div>
+              <button class="small-button" @click="addDeployment">Add version</button>
             </div>
             <div class="stack">
-              <div v-for="(version, index) in selectedApp.versions" :key="version.tag" class="version-row">
-                <input :value="version.tag" placeholder="latest" @change="renameVersion(index, $event.target.value)" />
-                <input v-model="version.label" placeholder="Latest" />
-                <button class="small-button" @click="deploymentModalKey = version.tag">Configure</button>
-                <button class="remove" title="Remove version" @click="removeVersion(index)"><MdiIcon :path="mdiClose" :size="16" /></button>
+              <div v-for="(deployment, index) in selectedApp.deployments" :key="index" class="version-row">
+                <input v-model.trim="deployment.name" placeholder="v1" />
+                <button class="button ghost" @click="openDeployments(index)">Configure</button>
+                <button class="remove" title="Remove version" @click="removeDeployment(index)"><MdiIcon :path="mdiDelete" :size="15" /></button>
               </div>
             </div>
           </section>
@@ -1275,58 +869,14 @@ const minifiedJson = computed(() => JSON.stringify(cleanForExport(storeData.valu
               <div v-for="(url, key) in selectedApp.links" :key="key" class="link-row">
                 <input :value="key" @change="renameLink(key, $event.target.value)" />
                 <input v-model.trim="selectedApp.links[key]" :class="{ invalid: appIssue(selectedApp, `link:${key}`) }" type="url" placeholder="https://…" />
-                <button class="remove" title="Remove link" @click="removeLink(key)"><MdiIcon :path="mdiClose" :size="16" /></button>
+                <button class="remove" title="Remove link" @click="removeLink(key)"><MdiIcon :path="mdiDelete" :size="15" /></button>
               </div>
               <p v-if="!Object.keys(selectedApp.links ?? {}).length" class="empty">No links yet.</p>
             </div>
           </section>
         </div>
 
-        <div v-else-if="activeTab === 'builds'" class="build-layout">
-          <section v-if="latestDeployment" class="latest-card">
-            <div>
-              <span class="eyebrow">LATEST VERSION DEPLOYMENT</span>
-              <h3>{{ latestVersion?.label || 'Latest' }}</h3>
-              <p>Each version owns an independent deployment configuration.</p>
-            </div>
-            <div class="latest-stats">
-              <div><strong>{{ latestDeployment.environment?.length ?? 0 }}</strong><span>Variables</span></div>
-              <div><strong>{{ latestDeployment.ports?.length ?? 0 }}</strong><span>Ports</span></div>
-              <div><strong>{{ latestDeployment.volumes?.length ?? 0 }}</strong><span>Volumes</span></div>
-            </div>
-          </section>
-
-          <section v-for="version in selectedApp.versions" v-if="selectedApp.deployments?.[version.tag]" :key="version.tag" class="panel deployment">
-            <div class="deployment-table-row" @click="toggleDeployment(version.tag)">
-              <button class="collapse-button" :title="collapsedDeployments.has(version.tag) ? 'Expand deployment' : 'Collapse deployment'" @click.stop="toggleDeployment(version.tag)"><MdiIcon :path="collapsedDeployments.has(version.tag) ? mdiChevronRight : mdiChevronDown" :size="18" /></button>
-              <div class="deployment-name"><strong>{{ version.label || version.tag }}</strong><code>{{ version.tag }}</code></div>
-              <span class="deployment-summary">{{ deploymentSummary(selectedApp.deployments[version.tag]) }}</span>
-              <div class="deployment-actions" @click.stop>
-                <button class="small-button" @click="copyDeployment(version.tag)">Copy</button>
-                <button class="small-button" :disabled="!deploymentClipboard" @click="pasteDeployment(version.tag)">Paste</button>
-                <button class="small-button" @click="deploymentModalKey = version.tag">Edit</button>
-              </div>
-            </div>
-            <div v-if="!collapsedDeployments.has(version.tag)" class="deployment-detail">
-              <div class="deployment-detail-grid">
-                <span><strong>Deployment name</strong> {{ version.tag }}</span>
-                <span><strong>Image</strong> {{ deploymentImage(selectedApp, version.tag) || 'Not set' }}</span>
-                <span><strong>Environment</strong> {{ selectedApp.deployments[version.tag].environment?.length ?? 0 }} variable(s)</span>
-              </div>
-              <button class="text-button icon-text-button" @click="deploymentModalKey = version.tag">Open deployment editor <MdiIcon :path="mdiArrowRight" :size="15" /></button>
-            </div>
-          </section>
-
-          <button class="add-build" @click="addDeployment">+ Add version deployment</button>
-        </div>
-
-        <section v-else class="panel json-panel">
-          <div class="panel-title">
-            <div><span class="muted">Live document</span><h3>Readable JSON</h3></div>
-            <button class="button ghost" @click="rawOpen = true">View minified</button>
-          </div>
-          <pre>{{ prettyJson }}</pre>
-        </section>
+        <JsonPreviewPage v-else :json="prettyJson" @view-minified="rawOpen = true" />
       </main>
 
       <main v-else class="empty-editor">
@@ -1343,32 +893,54 @@ const minifiedJson = computed(() => JSON.stringify(cleanForExport(storeData.valu
       <div class="status-path" :title="outputLocation">Output: {{ outputLocation }}</div>
       <div>{{ storeData.apps.length }} app{{ storeData.apps.length === 1 ? '' : 's' }}</div>
       <button v-if="hasErrors" class="status-issues" type="button" @click="issuesOpen = true">{{ validationIssues.length }} issue{{ validationIssues.length === 1 ? '' : 's' }}</button><div v-else>Ready</div>
+      <button class="status-settings" type="button" :title="`Settings (${displayHotkey(hotkeys.settings)})`" @click="settingsOpen = true"><MdiIcon :path="mdiCog" :size="14" /> Settings</button>
     </footer>
+
+    <div v-if="deploymentsOpen && selectedApp" class="modal-backdrop" @click.self="closeDeployments">
+      <section class="modal wide deployments-modal" role="dialog" aria-modal="true" aria-labelledby="deployments-title">
+        <div class="modal-head">
+          <div><span class="muted">{{ selectedApp.name || 'Application' }}</span><h2 id="deployments-title">Deployment configuration</h2></div>
+          <button class="icon-button" title="Close" @click="closeDeployments"><MdiIcon :path="mdiClose" /></button>
+        </div>
+        <DeploymentsPage
+          :app="selectedApp"
+          :deployment-index="activeDeploymentIndex"
+          :latest-deployment="latestDeployment"
+          :deployment-issue="deploymentIssue"
+          @remove="removeDeployment"
+          @add-port="addPort"
+          @add-volume="addVolume"
+          @add-environment="addEnvironment"
+          @remove-item="removeArrayItem"
+        />
+        <div class="modal-actions"><button class="button primary" @click="closeDeployments">Done</button></div>
+      </section>
+    </div>
 
 
     <div v-if="settingsOpen" class="modal-backdrop" @click.self="settingsOpen = false">
       <section class="modal settings-modal" role="dialog" aria-modal="true" aria-labelledby="settings-title">
-        <div class="modal-head">
-          <div><span class="muted">Application</span><h2 id="settings-title">Settings</h2></div>
-          <button class="icon-button" title="Close settings" @click="settingsOpen = false"><MdiIcon :path="mdiClose" /></button>
+        <div class="modal-head settings-head">
+          <div><span class="muted">CERBERUS STORE BUILDER</span><h2 id="settings-title">Settings</h2><p>Shape your workspace, local release location, and keyboard workflow.</p></div>
+          <button class="icon-button" title="Close" @click="settingsOpen = false"><MdiIcon :path="mdiClose" /></button>
         </div>
 
         <div class="settings-sections">
           <section class="settings-section">
             <div class="settings-section-copy">
-              <h3>Appearance</h3>
+              <div class="settings-section-title"><MdiIcon :path="mdiPaletteOutline" :size="19" /><h3>Appearance</h3></div>
               <p>Choose how Cerberus Store Builder should look. System follows your operating system and updates live.</p>
             </div>
             <div class="theme-switch settings-theme-switch" aria-label="Theme">
-              <button :class="{ active: themeMode === 'light' }" @click="setTheme('light')"><MdiIcon :path="mdiWhiteBalanceSunny" :size="15" /> <span>Light</span></button>
-              <button :class="{ active: themeMode === 'system' }" @click="setTheme('system')"><MdiIcon :path="mdiThemeLightDark" :size="15" /> <span>System</span></button>
-              <button :class="{ active: themeMode === 'dark' }" @click="setTheme('dark')"><MdiIcon :path="mdiWeatherNight" :size="15" /> <span>Dark</span></button>
+              <button :class="{ active: themeMode === 'light' }" @click="setTheme('light')"><MdiIcon :path="mdiWhiteBalanceSunny" :size="16" /> <span>Light</span></button>
+              <button :class="{ active: themeMode === 'system' }" @click="setTheme('system')"><MdiIcon :path="mdiThemeLightDark" :size="16" /> <span>System</span></button>
+              <button :class="{ active: themeMode === 'dark' }" @click="setTheme('dark')"><MdiIcon :path="mdiWeatherNight" :size="16" /> <span>Dark</span></button>
             </div>
           </section>
 
           <section class="settings-section">
             <div class="settings-section-copy">
-              <h3>Output folder</h3>
+              <div class="settings-section-title"><MdiIcon :path="mdiFolderCogOutline" :size="19" /><h3>Output folder</h3></div>
               <p>Saved releases and version history are written here. Changing this does not move existing files.</p>
             </div>
             <div class="settings-path-card">
@@ -1385,7 +957,7 @@ const minifiedJson = computed(() => JSON.stringify(cleanForExport(storeData.valu
 
           <section class="settings-section settings-shortcuts-section">
             <div class="settings-section-copy">
-              <h3>Keyboard shortcuts</h3>
+              <div class="settings-section-title"><MdiIcon :path="mdiKeyboardOutline" :size="19" /><h3>Keyboard shortcuts</h3></div>
               <p>Click a shortcut and press the new key combination. Changes are saved immediately and update the desktop menus.</p>
             </div>
             <div class="hotkey-list">
@@ -1400,20 +972,6 @@ const minifiedJson = computed(() => JSON.stringify(cleanForExport(storeData.valu
             </div>
           </section>
 
-          <section class="settings-section settings-info-section">
-            <div class="settings-section-copy">
-              <h3>Application information</h3>
-              <p>Useful details about this installation and where its local state is stored.</p>
-            </div>
-            <dl class="settings-info-grid">
-              <div><dt>Version</dt><dd>{{ appVersion || 'Development' }}</dd></div>
-              <div><dt>Platform</dt><dd>{{ desktopPlatform }}</dd></div>
-              <div><dt>Draft autosave</dt><dd>Local application profile</dd></div>
-              <div><dt>Release format</dt><dd>Minified JSON</dd></div>
-              <div v-if="settingsLocation" class="settings-info-wide"><dt>Native settings</dt><dd :title="settingsLocation">{{ settingsLocation }}</dd></div>
-            </dl>
-            <div class="settings-about-action"><button class="button ghost" type="button" @click="aboutOpen = true">About Cerberus Store Builder…</button></div>
-          </section>
         </div>
 
         <div class="settings-note">
@@ -1422,6 +980,7 @@ const minifiedJson = computed(() => JSON.stringify(cleanForExport(storeData.valu
         </div>
 
         <div class="modal-actions">
+          <button class="button ghost" type="button" @click="aboutOpen = true">About application</button>
           <button class="button primary" :disabled="hotkeyConflicts.size > 0" @click="settingsOpen = false">Done</button>
         </div>
       </section>
@@ -1430,15 +989,15 @@ const minifiedJson = computed(() => JSON.stringify(cleanForExport(storeData.valu
 
     <div v-if="aboutOpen" class="modal-backdrop" @click.self="aboutOpen = false">
       <section class="modal about-modal" role="dialog" aria-modal="true" aria-labelledby="about-title">
-        <div class="modal-head">
-          <div><span class="muted">Application</span><h2 id="about-title">About</h2></div>
-          <button class="icon-button" title="Close about" @click="aboutOpen = false"><MdiIcon :path="mdiClose" /></button>
+        <div class="modal-head about-head">
+          <div><span class="muted">CERBERUS STORE BUILDER</span><h2 id="about-title">About this application</h2><p>Release-file authoring for the Cerberus app store.</p></div>
+          <button class="icon-button" title="Close" @click="aboutOpen = false"><MdiIcon :path="mdiClose" /></button>
         </div>
-        <div class="about-hero">
-          <div class="about-logo"><img src="/logo-transparent.png" alt="Cerberus Store Builder logo" /></div>
-          <div><h3>Cerberus Store Builder</h3><p>Build, validate, version and export self-contained Cerberus app store release files.</p><span class="about-version">Version {{ appVersion || 'Development' }}</span></div>
+        <div class="about-hero about-card">
+          <div class="about-logo"><img src="/logo.png" alt="Cerberus Store Builder logo" /></div>
+          <div><h3>Cerberus Store Builder</h3><p>Build, validate, version, and export self-contained app-store releases.</p><span class="about-version">Version {{ appVersion || 'Development' }}</span></div>
         </div>
-        <dl class="about-details">
+        <dl class="about-details about-card">
           <div><dt>Platform</dt><dd>{{ desktopPlatform }}{{ desktopArch ? ` · ${desktopArch}` : '' }}</dd></div>
           <div v-if="electronVersion"><dt>Electron</dt><dd>{{ electronVersion }}</dd></div>
           <div v-if="chromeVersion"><dt>Chromium</dt><dd>{{ chromeVersion }}</dd></div>
@@ -1455,12 +1014,12 @@ const minifiedJson = computed(() => JSON.stringify(cleanForExport(storeData.valu
       <section class="modal issues-modal" role="dialog" aria-modal="true" aria-labelledby="issues-title">
         <div class="modal-head">
           <div><span class="muted">Validation</span><h2 id="issues-title">{{ validationIssues.length }} issue{{ validationIssues.length === 1 ? '' : 's' }} to fix</h2></div>
-          <button class="icon-button" title="Close issues" @click="issuesOpen = false"><MdiIcon :path="mdiClose" /></button>
+          <button class="icon-button" title="Close" @click="issuesOpen = false"><MdiIcon :path="mdiClose" /></button>
         </div>
         <p class="issues-intro">A release cannot be saved until these are resolved. Select an issue to jump to the relevant app or store settings.</p>
         <div class="issues-list">
           <button v-for="(issue, index) in validationIssues" :key="index" class="issue-row" type="button" @click="reviewIssue(issue)">
-            <span class="issue-symbol">!</span>
+            <MdiIcon class="issue-symbol" :path="mdiAlert" :size="18" />
             <span class="issue-copy">
               <strong>{{ issue.appId ? (storeData.apps.find(app => app.id === issue.appId)?.name || issue.appId) : 'Store' }}</strong>
               <span>{{ issue.message }}</span>
@@ -1475,16 +1034,20 @@ const minifiedJson = computed(() => JSON.stringify(cleanForExport(storeData.valu
     </div>
 
     <div v-if="metadataOpen" class="modal-backdrop" @click.self="metadataOpen = false">
-      <section class="modal">
+      <section class="modal store-data-modal">
         <div class="modal-head">
-          <div><span class="muted">Store file</span><h2>Package metadata</h2></div>
-          <button class="icon-button" title="Close metadata" @click="metadataOpen = false"><MdiIcon :path="mdiClose" /></button>
+          <div><span class="muted">Store release</span><h2>Store data</h2><p class="modal-subtitle">Configure release metadata before saving a versioned store file.</p></div>
+          <button class="icon-button" title="Close" @click="metadataOpen = false"><MdiIcon :path="mdiClose" /></button>
         </div>
         <div class="form-grid">
           <label><span>Name</span><input v-model="storeData.name" @blur="storeData.name = cleanName(storeData.name)" /></label>
-          <label><span>Current version</span><input v-model="storeData.version" /><small>Used as the base for the next automatic release.</small></label>
+          <label><span>Release base version</span><input v-model="baseStoreVersion" inputmode="decimal" pattern="\d+\.\d+\.\d+" placeholder="0.0.0" /><small>Only the stable base is stored here.</small></label>
           <label><span>Author</span><input v-model="storeData.author" @blur="storeData.author = cleanName(storeData.author)" /></label>
           <label class="span-2"><span>Description</span><textarea v-model="storeData.description" rows="4"></textarea></label>
+        </div>
+        <div class="release-metadata">
+          <label><span>Release channel</span><select v-model="releaseChannel"><option value="alpha">Alpha</option><option value="beta">Beta</option><option value="public">Public</option></select></label>
+          <div class="release-next"><span>Calculated next release</span><strong>{{ nextReleaseVersion }}</strong><small>The channel suffix is calculated automatically.</small></div>
         </div>
         <div v-if="validationIssues.length" class="validation-summary">
           <strong>{{ validationIssues.length }} validation issue{{ validationIssues.length === 1 ? '' : 's' }}</strong>
@@ -1492,53 +1055,9 @@ const minifiedJson = computed(() => JSON.stringify(cleanForExport(storeData.valu
           <small v-if="validationIssues.length > 8">And {{ validationIssues.length - 8 }} more…</small>
         </div>
         <div class="modal-actions">
+          <button class="button ghost" :disabled="saving" @click="loadLastSave">Load saved release</button>
           <button class="button primary" @click="metadataOpen = false">Done</button>
         </div>
-      </section>
-    </div>
-
-    <div v-if="deploymentModal" class="modal-backdrop" @click.self="deploymentModalKey = null">
-      <section class="modal wide deployment-modal" role="dialog" aria-modal="true" aria-labelledby="deployment-title">
-        <div class="modal-head">
-          <div><span class="muted">Version deployment</span><h2 id="deployment-title">{{ deploymentVersion(deploymentModalKey).label || deploymentModalKey }}</h2><code>{{ deploymentModalKey }}</code></div>
-          <button class="icon-button" title="Close deployment editor" @click="deploymentModalKey = null"><MdiIcon :path="mdiClose" /></button>
-        </div>
-        <div class="form-grid">
-          <label><span>Deployment name</span><input :value="deploymentModalKey" disabled /><small>Always matches the version tag.</small></label>
-          <label><span>Docker image</span><input :value="deploymentImage(selectedApp, deploymentModalKey)" disabled /><small>Derived from the base image and version tag.</small></label>
-        </div>
-        <div class="subsection">
-          <div class="subsection-title"><h4>Environment variables</h4><button class="small-button" @click="addEnvironment(deploymentModal)">Add variable</button></div>
-          <div class="environment-row header"><span>Name</span><span>Value</span><span></span></div>
-          <div v-for="(variable, index) in deploymentModal.environment" :key="index" class="environment-row">
-            <input v-model.trim="variable.name" :class="{ invalid: deploymentIssue(selectedApp, deploymentModalKey, 'environment-name', index) }" placeholder="VARIABLE_NAME" />
-            <input v-model="variable.value" placeholder="Value" />
-            <button class="remove" title="Remove variable" @click="removeArrayItem(deploymentModal.environment, index)"><MdiIcon :path="mdiClose" :size="16" /></button>
-          </div>
-          <p v-if="!deploymentModal.environment?.length" class="empty">No environment variables.</p>
-        </div>
-        <div class="subsection">
-          <div class="subsection-title"><h4>Ports</h4><button class="small-button" @click="addPort(deploymentModal)">Add port</button></div>
-          <div class="table-row header"><span>Host</span><span>Container</span><span>Protocol</span><span>Label</span><span></span></div>
-          <div v-for="(port, index) in deploymentModal.ports" :key="index" class="table-row">
-            <input v-model.number="port.host" :class="{ invalid: deploymentIssue(selectedApp, deploymentModalKey, 'host-port', index) }" type="number" min="1" max="65535" />
-            <input v-model.number="port.container" :class="{ invalid: deploymentIssue(selectedApp, deploymentModalKey, 'container-port', index) }" type="number" min="1" max="65535" />
-            <select class="protocol-select" v-model="port.protocol" :class="{ invalid: deploymentIssue(selectedApp, deploymentModalKey, 'protocol', index) }"><option value="tcp">TCP</option><option value="udp">UDP</option><option value="both">TCP / UDP</option></select>
-            <input v-model="port.label" placeholder="Label" /><button class="remove" title="Remove port" @click="removeArrayItem(deploymentModal.ports, index)"><MdiIcon :path="mdiClose" :size="16" /></button>
-          </div>
-          <p v-if="!deploymentModal.ports?.length" class="empty">No published ports.</p>
-        </div>
-        <div class="subsection">
-          <div class="subsection-title"><h4>Volumes</h4><button class="small-button" @click="addVolume(deploymentModal)">Add volume</button></div>
-          <div class="table-row volume header"><span>Host</span><span>Container</span><span>Label</span><span></span></div>
-          <div v-for="(volume, index) in deploymentModal.volumes" :key="index" class="table-row volume">
-            <input v-model.trim="volume.host" :class="{ invalid: deploymentIssue(selectedApp, deploymentModalKey, 'volume-host', index) }" placeholder="Host path or volume" />
-            <input v-model.trim="volume.container" :class="{ invalid: deploymentIssue(selectedApp, deploymentModalKey, 'volume-container', index) }" placeholder="/container/path" />
-            <input v-model="volume.label" placeholder="Label" /><button class="remove" title="Remove volume" @click="removeArrayItem(deploymentModal.volumes, index)"><MdiIcon :path="mdiClose" :size="16" /></button>
-          </div>
-          <p v-if="!deploymentModal.volumes?.length" class="empty">No mounted volumes.</p>
-        </div>
-        <div class="modal-actions"><button class="button primary" @click="deploymentModalKey = null">Done</button></div>
       </section>
     </div>
 
@@ -1546,7 +1065,7 @@ const minifiedJson = computed(() => JSON.stringify(cleanForExport(storeData.valu
       <section class="modal wide">
         <div class="modal-head">
           <div><span class="muted">Backend save representation</span><h2>Minified JSON</h2></div>
-          <button class="icon-button" title="Close JSON preview" @click="rawOpen = false"><MdiIcon :path="mdiClose" /></button>
+          <button class="icon-button" title="Close" @click="rawOpen = false"><MdiIcon :path="mdiClose" /></button>
         </div>
         <pre class="raw-json">{{ minifiedJson }}</pre>
       </section>
@@ -1554,7 +1073,7 @@ const minifiedJson = computed(() => JSON.stringify(cleanForExport(storeData.valu
 
     <div v-if="clearOpen" class="modal-backdrop destructive-backdrop" @click.self="nudgeClearModal">
       <section class="modal confirm-modal" :class="{ 'modal-pulse': clearNudge }" role="alertdialog" aria-modal="true" aria-labelledby="clear-title">
-        <div class="confirm-icon"><MdiIcon :path="mdiAlert" :size="24" /></div>
+        <div class="confirm-icon"><MdiIcon :path="mdiAlert" :size="28" /></div>
         <div class="confirm-copy">
           <span class="eyebrow">CLEAR DRAFT</span>
           <h2 id="clear-title">Clear the current store?</h2>
@@ -1563,21 +1082,6 @@ const minifiedJson = computed(() => JSON.stringify(cleanForExport(storeData.valu
         <div class="confirm-actions">
           <button class="button ghost" @click="cancelClear">Go back</button>
           <button class="button danger confirm-danger" @click="confirmClear">Confirm clear</button>
-        </div>
-      </section>
-    </div>
-
-    <div v-if="exportOpen" class="modal-backdrop" @click.self="exportOpen = false">
-      <section class="modal confirm-modal" role="dialog" aria-modal="true" aria-labelledby="export-title">
-        <div class="confirm-icon"><MdiIcon :path="mdiExportVariant" :size="24" /></div>
-        <div class="confirm-copy">
-          <span class="eyebrow">EXPORT RELEASE</span>
-          <h2 id="export-title">Export this release?</h2>
-          <p>This writes version <code>{{ nextReleaseVersion }}</code> as a JSON release file to <code>{{ outputLocation }}</code>.</p>
-        </div>
-        <div class="confirm-actions">
-          <button class="button ghost" @click="exportOpen = false">Cancel</button>
-          <button class="button primary" :disabled="saving" @click="exportRelease">{{ saving ? 'Exporting…' : 'Export release' }}</button>
         </div>
       </section>
     </div>

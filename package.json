@@ -1,15 +1,15 @@
 {
 	"name": "cerberus-store-builder",
 	"productName": "Cerberus Store Builder",
-	"description": "Build, validate, version and export self-contained Cerberus app store release files.",
+	"desktopName": "com.cerberus.storebuilder",
+	"version": "1.0.0-beta3",
 	"homepage": "https://github.com/CerberusPanel/cerberus-store-builder",
-	"license": "PolyForm-Noncommercial-1.0.0",
+	"description": "Build, validate, version and export self-contained Cerberus app store release files.",
 	"author": {
 		"name": "Ryvor",
 		"email": "rsmith_20@outlook.com"
 	},
-	"private": true,
-	"version": "1.0.0-beta2",
+	"license": "PolyForm-Noncommercial-1.0.0",
 	"type": "module",
 	"main": "electron/main.js",
 	"scripts": {
@@ -19,7 +19,7 @@
 		"build:desktop": "vite build && electron-builder",
 		"build:win": "vite build && electron-builder --win",
 		"build:mac": "vite build && electron-builder --mac",
-		"build:linux": "vite build && electron-builder --linux",
+		"build:linux": "vite build && electron-builder --linux && ./scripts/patch-deb.sh",
 		"preview": "vite preview"
 	},
 	"dependencies": {
@@ -36,32 +36,17 @@
 		"wait-on": "latest"
 	},
 	"build": {
-		"appId": "com.ryvor.cerberus.storebuilder",
+		"appId": "com.cerberus.storebuilder",
 		"productName": "Cerberus Store Builder",
-		"artifactName": "Cerberus-Store-Builder-${version}-${os}-${arch}.${ext}",
 		"directories": {
 			"output": "dist-electron"
 		},
 		"files": [
 			"dist/**/*",
 			"electron/**/*",
-			"package.json",
-			"build/logo-transparent.png"
-		],
-		"extraResources": [
-			{
-				"from": "build/com.ryvor.CerberusStoreBuilder.metainfo.xml",
-				"to": "com.ryvor.CerberusStoreBuilder.metainfo.xml"
-			}
+			"package.json"
 		],
 		"asar": true,
-		"mac": {
-			"category": "public.app-category.developer-tools",
-			"target": [
-				"dmg",
-				"zip"
-			]
-		},
 		"win": {
 			"target": [
 				{
@@ -73,35 +58,51 @@
 				}
 			]
 		},
+		"mac": {
+			"category": "public.app-category.developer-tools",
+			"target": [
+				"dmg",
+				"zip"
+			]
+		},
 		"linux": {
+			"target": [
+				"AppImage",
+				"deb",
+				"snap"
+			],
+
+			"icon": "build/icons",
+
 			"category": "Development",
-			"synopsis": "Create and publish Cerberus app-store release files.",
-			"description": "Create, validate, version, and export self-contained Cerberus app-store release files with version-specific deployment configuration.",
-			"maintainer": "Ryvor <rsmith_20@outlook.com>",
+			"synopsis": "Store manifest editor for Cerberus",
+			"description": "A desktop application for creating, editing, validating and exporting Cerberus application store manifests.",
+
+			"maintainer": "Robert Smith",
 			"vendor": "Cerberus",
+
+			"syncDesktopName": true,
+
 			"desktop": {
 				"entry": {
 					"Name": "Cerberus Store Builder",
-					"Comment": "Create and publish Cerberus app-store release files",
-					"Categories": "Development;",
-					"Keywords": "cerberus;app store;deployment;docker;"
+					"Comment": "Create and edit Cerberus app store manifests",
+					"Categories": "Development;Utility;",
+					"Keywords": "cerberus;store;docker;server;apps;",
+					"Terminal": false,
+					"Type": "Application",
+					"StartupWMClass": "com.cerberus.storebuilder"
 				}
-			},
-			"target": [
-				"AppImage",
-				"deb"
-			]
+			}
 		},
 		"deb": {
 			"packageCategory": "devel",
-			"priority": "optional",
-			"afterInstall": "build/deb-postinstall.sh",
-			"afterRemove": "build/deb-postremove.sh"
+			"priority": "optional"
 		},
 		"nsis": {
 			"oneClick": false,
 			"allowToChangeInstallationDirectory": true
 		},
-		"icon": "build/logo-transparent.png"
+		"icon": "build/icons/512x512.png"
 	}
 }

@@ -1,0 +1,60 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+	<id>com.cerberus.storebuilder</id>
+
+	<name>Cerberus Store Builder</name>
+
+	<summary>
+		Build and manage Cerberus app store releases
+	</summary>
+
+	<metadata_license>CC0-1.0</metadata_license>
+
+	<!-- Replace this once you've chosen your actual software licence -->
+	<project_license>LicenseRef-proprietary</project_license>
+
+	<description>
+		<p>
+			Cerberus Store Builder is a desktop application for creating,
+			editing, validating, versioning and exporting Cerberus app store
+			release files.
+		</p>
+		<p>
+			It provides tools for managing application metadata, release
+			channels, icons and store manifests from a native desktop interface.
+		</p>
+	</description>
+
+	<developer id="com.cerberus">
+		<name>Ryvor</name>
+	</developer>
+
+	<launchable type="desktop-id">
+		com.cerberus.storebuilder.desktop
+	</launchable>
+
+	<categories>
+		<category>Development</category>
+		<category>Utility</category>
+	</categories>
+
+	<url type="homepage">
+		https://github.com/CerberusPanel/cerberus-store-builder
+	</url>
+
+	<url type="bugtracker">
+		https://github.com/CerberusPanel/cerberus-store-builder/issues
+	</url>
+
+	<provides>
+		<binary>cerberus-store-builder</binary>
+	</provides>
+
+	<releases>
+		<release version="1.0.0-beta3" date="2026-09-14">
+			<description>
+				<p>Beta release of Cerberus Store Builder.</p>
+			</description>
+		</release>
+	</releases>
+</component>
